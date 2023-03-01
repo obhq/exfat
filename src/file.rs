@@ -29,6 +29,10 @@ impl<I: Read + Seek> File<I> {
         self.name.as_ref()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn len(&self) -> u64 {
         self.stream.valid_data_length()
     }
@@ -48,8 +52,8 @@ impl<I: Read + Seek> File<I> {
         let fat = self.image.fat() as *const Fat;
         let mut image = Box::new(self.image.reader());
         let reader = match ClustersReader::new(
-            unsafe { transmute(params) },
-            unsafe { transmute(fat) },
+            unsafe { transmute(&*params) },
+            unsafe { transmute(&*fat) },
             unsafe { transmute(image.as_mut().deref_mut()) },
             first_cluster,
             Some(self.stream.valid_data_length()),
