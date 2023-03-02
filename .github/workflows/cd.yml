@@ -1,0 +1,16 @@
+name: CD
+on:
+  push:
+    tags:
+    - '*'
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-22.04
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+    - name: Checkout source
+      uses: actions/checkout@v3
+    - name: Publish crate
+      run: cargo publish

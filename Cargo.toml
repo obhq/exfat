@@ -1,6 +1,9 @@
 [package]
 name = "exfat"
 version = "0.1.0"
+description = "Pure Rust implementation of exFAT file system"
+repository = "https://github.com/obhq/exfat"
+license = "MIT"
 edition = "2021"
 
 [dependencies]
