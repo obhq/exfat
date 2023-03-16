@@ -1,38 +1,39 @@
 use self::cluster::ClustersReader;
 use self::directory::{Directory, Item};
+use self::disk::DiskPartition;
 use self::entries::{ClusterAllocation, EntriesReader, EntryType, FileEntry};
 use self::fat::Fat;
 use self::file::File;
-use self::image::Image;
 use self::param::Params;
 use byteorder::{ByteOrder, LE};
-use std::io::{Read, Seek};
+use std::error::Error;
 use std::sync::Arc;
 use thiserror::Error;
 
 pub mod cluster;
 pub mod directory;
+pub mod disk;
 pub mod entries;
 pub mod fat;
 pub mod file;
 pub mod image;
 pub mod param;
 
-/// Represents an opened exFAT.
+/// Represents a root directory in exFAT.
 ///
 /// This implementation follows the official specs
 /// https://learn.microsoft.com/en-us/windows/win32/fileio/exfat-specification.
-pub struct ExFat<I: Read + Seek> {
+pub struct Root<P: DiskPartition> {
     volume_label: Option<String>,
-    items: Vec<Item<I>>,
+    items: Vec<Item<P>>,
 }
 
-impl<I: Read + Seek> ExFat<I> {
-    pub fn open(mut image: I) -> Result<Self, OpenError> {
+impl<P: DiskPartition> Root<P> {
+    pub fn open(partition: P) -> Result<Self, OpenError> {
         // Read boot sector.
         let mut boot = [0u8; 512];
 
-        if let Err(e) = image.read_exact(&mut boot) {
+        if let Err(e) = partition.read_exact(0, &mut boot) {
             return Err(OpenError::ReadMainBootFailed(e));
         }
 
@@ -83,7 +84,7 @@ impl<I: Read + Seek> ExFat<I> {
         // Read FAT region.
         let active_fat = params.volume_flags.active_fat();
         let fat = if active_fat == 0 || params.number_of_fats == 2 {
-            match Fat::load(&params, &mut image, active_fat) {
+            match Fat::load(&params, &partition, active_fat) {
                 Ok(v) => v,
                 Err(e) => return Err(OpenError::ReadFatRegionFailed(e)),
             }
@@ -92,8 +93,14 @@ impl<I: Read + Seek> ExFat<I> {
         };
 
         // Create a entries reader for the root directory.
-        let root = params.first_cluster_of_root_directory;
-        let mut reader = match ClustersReader::new(&params, &fat, &mut image, root, None, None) {
+        let root_cluster = params.first_cluster_of_root_directory;
+        let exfat = Arc::new(ExFat {
+            partition,
+            params,
+            fat,
+        });
+
+        let mut reader = match ClustersReader::new(exfat.clone(), root_cluster, None, None) {
             Ok(v) => EntriesReader::new(v),
             Err(e) => return Err(OpenError::CreateClustersReaderFailed(e)),
         };
@@ -102,7 +109,7 @@ impl<I: Read + Seek> ExFat<I> {
         let mut allocation_bitmaps: [Option<ClusterAllocation>; 2] = [None, None];
         let mut upcase_table: Option<()> = None;
         let mut volume_label: Option<String> = None;
-        let mut files: Vec<FileEntry> = Vec::new();
+        let mut items: Vec<Item<P>> = Vec::new();
 
         loop {
             // Read primary entry.
@@ -192,18 +199,39 @@ impl<I: Read + Seek> ExFat<I> {
 
                     volume_label = Some(String::from_utf16_lossy(label));
                 }
-                (EntryType::CRITICAL, 5) => match FileEntry::load(entry, &mut reader) {
-                    Ok(v) => files.push(v),
-                    Err(e) => return Err(OpenError::LoadFileEntryFailed(e)),
-                },
+                (EntryType::CRITICAL, 5) => {
+                    // Load the entry.
+                    let file = match FileEntry::load(&entry, &mut reader) {
+                        Ok(v) => v,
+                        Err(e) => return Err(OpenError::LoadFileEntryFailed(e)),
+                    };
+
+                    let name = file.name;
+                    let attrs = file.attributes;
+                    let stream = file.stream;
+
+                    // Add to the list.
+                    items.push(if attrs.is_directory() {
+                        Item::Directory(Directory::new(exfat.clone(), name, stream))
+                    } else {
+                        match File::new(exfat.clone(), name, stream) {
+                            Ok(v) => Item::File(v),
+                            Err(e) => {
+                                return Err(OpenError::CreateFileObjectFailed(
+                                    entry.index(),
+                                    entry.cluster(),
+                                    e,
+                                ));
+                            }
+                        }
+                    });
+                }
                 _ => return Err(OpenError::UnknownEntry(entry.index(), entry.cluster())),
             }
         }
 
-        drop(reader);
-
         // Check allocation bitmap count.
-        if params.number_of_fats == 2 {
+        if exfat.params.number_of_fats == 2 {
             if allocation_bitmaps[1].is_none() {
                 return Err(OpenError::NoAllocationBitmap);
             }
@@ -214,27 +242,6 @@ impl<I: Read + Seek> ExFat<I> {
         // Check Up-case Table.
         if upcase_table.is_none() {
             return Err(OpenError::NoUpcaseTable);
-        }
-
-        // Encapsulate the image.
-        let image = Arc::new(Image::new(image, params, fat));
-
-        // Construct root items.
-        let mut items: Vec<Item<I>> = Vec::with_capacity(files.len());
-
-        for file in files {
-            let name = file.name;
-            let attrs = file.attributes;
-            let stream = file.stream;
-
-            // Check if directory.
-            let item = if attrs.is_directory() {
-                Item::Directory(Directory::new(image.clone(), name, stream))
-            } else {
-                Item::File(File::new(image.clone(), name, stream))
-            };
-
-            items.push(item);
         }
 
         Ok(Self {
@@ -248,9 +255,9 @@ impl<I: Read + Seek> ExFat<I> {
     }
 }
 
-impl<I: Read + Seek> IntoIterator for ExFat<I> {
-    type Item = Item<I>;
-    type IntoIter = std::vec::IntoIter<Item<I>>;
+impl<P: DiskPartition> IntoIterator for Root<P> {
+    type Item = Item<P>;
+    type IntoIter = std::vec::IntoIter<Item<P>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.items.into_iter()
@@ -284,11 +291,18 @@ impl FileAttributes {
     }
 }
 
-/// Errors for [`open()`][ExFat::open()].
+/// Contains objects for the opened exFAT.
+pub(crate) struct ExFat<P: DiskPartition> {
+    partition: P,
+    params: Params,
+    fat: Fat,
+}
+
+/// Represents an error for [`Root::open()`].
 #[derive(Debug, Error)]
 pub enum OpenError {
     #[error("cannot read main boot region")]
-    ReadMainBootFailed(#[source] std::io::Error),
+    ReadMainBootFailed(#[source] Box<dyn Error + Send + Sync>),
 
     #[error("image is not exFAT")]
     NotExFat,
@@ -331,6 +345,9 @@ pub enum OpenError {
 
     #[error("cannot load file entry in the root directory")]
     LoadFileEntryFailed(#[source] entries::FileEntryError),
+
+    #[error("cannot create a file object for directory entry #{0} on cluster #{1}")]
+    CreateFileObjectFailed(usize, usize, #[source] file::NewError),
 
     #[error("cannot read cluster allocation for entry #{0} on cluster #{1}")]
     ReadClusterAllocationFailed(usize, usize, #[source] entries::ClusterAllocationError),

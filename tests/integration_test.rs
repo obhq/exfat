@@ -1,5 +1,6 @@
 use exfat::directory::Item;
-use exfat::ExFat;
+use exfat::image::Image;
+use exfat::Root;
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
@@ -9,15 +10,16 @@ fn read_image() {
     // Open the image.
     let image: PathBuf = ["tests", "exfat.img"].iter().collect();
     let image = File::open(image).expect("cannot open exfat.img");
+    let image = Image::open(image).expect("cannot open exFAT image from exfat.img");
 
-    // Open exFAT.
-    let exfat = ExFat::open(image).expect("cannot open exFAT");
+    // Open root directory.
+    let root = Root::open(image).expect("cannot open the root directory");
 
     // Check image properties.
-    assert_eq!(Some("Test image"), exfat.volume_label());
+    assert_eq!(Some("Test image"), root.volume_label());
 
     // Check items in the root of image.
-    let items: Vec<Item<File>> = exfat.into_iter().collect();
+    let items = Vec::from_iter(root.into_iter());
 
     assert_eq!(2, items.len());
 
@@ -41,10 +43,8 @@ fn read_image() {
 
                         // Check file content.
                         let mut c = String::new();
-                        let r = f.open().expect("cannot open file2");
-                        let mut r = r.expect("file2 should not be empty");
 
-                        r.read_to_string(&mut c).expect("cannot read file2");
+                        f.read_to_string(&mut c).expect("cannot read file2");
 
                         assert_eq!("Test file 2.\n", c);
                     }
@@ -57,10 +57,8 @@ fn read_image() {
 
                 // Check file content.
                 let mut c = String::new();
-                let r = f.open().expect("cannot open file1");
-                let mut r = r.expect("file1 should not be empty");
 
-                r.read_to_string(&mut c).expect("cannot read file1");
+                f.read_to_string(&mut c).expect("cannot read file1");
 
                 assert_eq!("Test file 1.\n", c);
             }
