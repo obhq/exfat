@@ -6,6 +6,10 @@ repository = "https://github.com/obhq/exfat"
 license = "MIT"
 edition = "2021"
 
+[features]
+default = ["std"]
+std = []
+
 [dependencies]
 byteorder = "1.4"
 thiserror = "1.0"
