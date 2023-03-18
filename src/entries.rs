@@ -1,19 +1,20 @@
 use crate::cluster::ClustersReader;
+use crate::disk::DiskPartition;
 use crate::FileAttributes;
 use byteorder::{ByteOrder, LE};
 use std::cmp::min;
 use std::fmt::{Display, Formatter};
-use std::io::{Read, Seek};
+use std::io::Read;
 use thiserror::Error;
 
 /// A struct to read directory entries.
-pub(crate) struct EntriesReader<'a, I: Read + Seek> {
-    cluster_reader: ClustersReader<'a, I>,
+pub(crate) struct EntriesReader<P: DiskPartition> {
+    cluster_reader: ClustersReader<P>,
     entry_index: usize,
 }
 
-impl<'a, I: Read + Seek> EntriesReader<'a, I> {
-    pub fn new(cluster_reader: ClustersReader<'a, I>) -> Self {
+impl<P: DiskPartition> EntriesReader<P> {
+    pub fn new(cluster_reader: ClustersReader<P>) -> Self {
         Self {
             cluster_reader,
             entry_index: 0,
@@ -80,12 +81,12 @@ pub(crate) struct FileEntry {
 }
 
 impl FileEntry {
-    pub fn load<I>(raw: RawEntry, reader: &mut EntriesReader<I>) -> Result<Self, FileEntryError>
+    pub fn load<P>(raw: &RawEntry, reader: &mut EntriesReader<P>) -> Result<Self, FileEntryError>
     where
-        I: Read + Seek,
+        P: DiskPartition,
     {
         // Load fields.
-        let data = raw.data;
+        let data = &raw.data;
         let secondary_count = data[1] as usize;
         let attributes = FileAttributes(LE::read_u16(&data[4..]));
 

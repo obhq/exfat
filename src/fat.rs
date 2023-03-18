@@ -1,6 +1,7 @@
+use crate::disk::DiskPartition;
 use crate::param::Params;
 use byteorder::{ByteOrder, LE};
-use std::io::{Read, Seek, SeekFrom};
+use std::error::Error;
 use thiserror::Error;
 
 pub(super) struct Fat {
@@ -8,12 +9,12 @@ pub(super) struct Fat {
 }
 
 impl Fat {
-    pub fn load<I: Read + Seek>(
+    pub fn load<P: DiskPartition>(
         params: &Params,
-        image: &mut I,
+        partition: &P,
         index: usize,
     ) -> Result<Self, LoadError> {
-        // Seek to FAT region.
+        // Get FAT region offset.
         let sector = match params.fat_length.checked_mul(index as u64) {
             Some(v) => match params.fat_offset.checked_add(v) {
                 Some(v) => v,
@@ -27,21 +28,12 @@ impl Fat {
             None => return Err(LoadError::InvalidFatOffset),
         };
 
-        match image.seek(SeekFrom::Start(offset)) {
-            Ok(v) => {
-                if v != offset {
-                    return Err(LoadError::InvalidFatOffset);
-                }
-            }
-            Err(e) => return Err(LoadError::IoFailed(e)),
-        }
-
         // Load entries.
         let count = params.cluster_count + 2;
         let mut data = vec![0u8; count * 4];
 
-        if let Err(e) = image.read_exact(&mut data) {
-            return Err(LoadError::IoFailed(e));
+        if let Err(e) = partition.read_exact(offset, &mut data) {
+            return Err(LoadError::ReadFailed(offset, e));
         }
 
         // Convert each entry from little endian to native endian.
@@ -84,6 +76,7 @@ impl<'fat> Iterator for ClusterChain<'fat> {
     }
 }
 
+/// Represents an error for [`Fat::load()`].
 #[derive(Debug, Error)]
 pub enum LoadError {
     #[error("invalid FatLength")]
@@ -92,6 +85,6 @@ pub enum LoadError {
     #[error("invalid FatOffset")]
     InvalidFatOffset,
 
-    #[error("cannot read the image")]
-    IoFailed(#[source] std::io::Error),
+    #[error("cannot read data at {0:#018x}")]
+    ReadFailed(u64, #[source] Box<dyn Error + Send + Sync>),
 }

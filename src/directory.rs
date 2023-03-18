@@ -1,23 +1,22 @@
 use crate::cluster::ClustersReader;
+use crate::disk::DiskPartition;
 use crate::entries::{ClusterAllocation, EntriesReader, EntryType, FileEntry, StreamEntry};
 use crate::file::File;
-use crate::image::Image;
-use std::io::{Read, Seek};
-use std::ops::DerefMut;
+use crate::ExFat;
 use std::sync::Arc;
 use thiserror::Error;
 
 /// Represents a directory in the exFAT.
-pub struct Directory<I: Read + Seek> {
-    image: Arc<Image<I>>,
+pub struct Directory<P: DiskPartition> {
+    exfat: Arc<ExFat<P>>,
     name: String,
     stream: StreamEntry,
 }
 
-impl<I: Read + Seek> Directory<I> {
-    pub(crate) fn new(image: Arc<Image<I>>, name: String, stream: StreamEntry) -> Self {
+impl<P: DiskPartition> Directory<P> {
+    pub(crate) fn new(exfat: Arc<ExFat<P>>, name: String, stream: StreamEntry) -> Self {
         Self {
-            image,
+            exfat,
             name,
             stream,
         }
@@ -27,16 +26,11 @@ impl<I: Read + Seek> Directory<I> {
         self.name.as_ref()
     }
 
-    pub fn open(&self) -> Result<Vec<Item<I>>, OpenError> {
+    pub fn open(&self) -> Result<Vec<Item<P>>, OpenError> {
         // Create an entries reader.
-        let params = self.image.params();
-        let fat = self.image.fat();
-        let mut image = self.image.reader();
         let alloc = self.stream.allocation();
         let mut reader = match ClustersReader::new(
-            params,
-            fat,
-            image.deref_mut(),
+            self.exfat.clone(),
             alloc.first_cluster(),
             Some(alloc.data_length()),
             Some(self.stream.no_fat_chain()),
@@ -46,7 +40,7 @@ impl<I: Read + Seek> Directory<I> {
         };
 
         // Read file entries.
-        let mut items: Vec<Item<I>> = Vec::new();
+        let mut items: Vec<Item<P>> = Vec::new();
 
         loop {
             // Read primary entry.
@@ -67,7 +61,7 @@ impl<I: Read + Seek> Directory<I> {
             }
 
             // Parse file entry.
-            let file = match FileEntry::load(entry, &mut reader) {
+            let file = match FileEntry::load(&entry, &mut reader) {
                 Ok(v) => v,
                 Err(e) => return Err(OpenError::LoadFileEntryFailed(e)),
             };
@@ -77,13 +71,20 @@ impl<I: Read + Seek> Directory<I> {
             let attrs = file.attributes;
             let stream = file.stream;
 
-            let item = if attrs.is_directory() {
-                Item::Directory(Directory::new(self.image.clone(), name, stream))
+            items.push(if attrs.is_directory() {
+                Item::Directory(Directory::new(self.exfat.clone(), name, stream))
             } else {
-                Item::File(File::new(self.image.clone(), name, stream))
-            };
-
-            items.push(item);
+                match File::new(self.exfat.clone(), name, stream) {
+                    Ok(v) => Item::File(v),
+                    Err(e) => {
+                        return Err(OpenError::CreateFileObjectFailed(
+                            entry.index(),
+                            entry.cluster(),
+                            e,
+                        ));
+                    }
+                }
+            });
         }
 
         Ok(items)
@@ -91,9 +92,9 @@ impl<I: Read + Seek> Directory<I> {
 }
 
 /// Represents an item in the directory.
-pub enum Item<I: Read + Seek> {
-    Directory(Directory<I>),
-    File(File<I>),
+pub enum Item<P: DiskPartition> {
+    Directory(Directory<P>),
+    File(File<P>),
 }
 
 /// Represents an error for [`open()`][Directory::open].
@@ -113,4 +114,7 @@ pub enum OpenError {
 
     #[error("cannot load file entry")]
     LoadFileEntryFailed(#[source] crate::entries::FileEntryError),
+
+    #[error("cannot create a file object for directory entry #{0} on cluster #{1}")]
+    CreateFileObjectFailed(usize, usize, #[source] crate::file::NewError),
 }
