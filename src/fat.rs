@@ -1,10 +1,9 @@
 use crate::disk::DiskPartition;
 use crate::param::Params;
 use byteorder::{ByteOrder, LE};
-use std::error::Error;
-use thiserror::Error;
+use core::fmt::Display;
 
-pub(super) struct Fat {
+pub(crate) struct Fat {
     entries: Vec<u32>,
 }
 
@@ -77,14 +76,34 @@ impl<'fat> Iterator for ClusterChain<'fat> {
 }
 
 /// Represents an error for [`Fat::load()`].
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum LoadError {
-    #[error("invalid FatLength")]
     InvalidFatLength,
-
-    #[error("invalid FatOffset")]
     InvalidFatOffset,
 
-    #[error("cannot read data at {0:#018x}")]
-    ReadFailed(u64, #[source] Box<dyn Error + Send + Sync>),
+    #[cfg(not(feature = "std"))]
+    ReadFailed(u64, Box<dyn Display + Send + Sync>),
+
+    #[cfg(feature = "std")]
+    ReadFailed(u64, Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl Display for LoadError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InvalidFatLength => f.write_str("invalid FatLength"),
+            Self::InvalidFatOffset => f.write_str("invalid FatOffset"),
+            Self::ReadFailed(offset, _) => write!(f, "cannot read the data at {offset:#018x}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for LoadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ReadFailed(_, e) => Some(e.as_ref()),
+            _ => None,
+        }
+    }
 }
