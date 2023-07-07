@@ -2,6 +2,7 @@ use crate::cluster::ClustersReader;
 use crate::disk::DiskPartition;
 use crate::entries::{ClusterAllocation, EntriesReader, EntryType, FileEntry, StreamEntry};
 use crate::file::File;
+use crate::timestamp::Timestamps;
 use crate::ExFat;
 use std::sync::Arc;
 use thiserror::Error;
@@ -11,19 +12,30 @@ pub struct Directory<P: DiskPartition> {
     exfat: Arc<ExFat<P>>,
     name: String,
     stream: StreamEntry,
+    timestamps: Timestamps,
 }
 
 impl<P: DiskPartition> Directory<P> {
-    pub(crate) fn new(exfat: Arc<ExFat<P>>, name: String, stream: StreamEntry) -> Self {
+    pub(crate) fn new(
+        exfat: Arc<ExFat<P>>,
+        name: String,
+        stream: StreamEntry,
+        timestamps: Timestamps,
+    ) -> Self {
         Self {
             exfat,
             name,
             stream,
+            timestamps,
         }
     }
 
     pub fn name(&self) -> &str {
         self.name.as_ref()
+    }
+
+    pub fn timestamps(&self) -> &Timestamps {
+        &self.timestamps
     }
 
     pub fn open(&self) -> Result<Vec<Item<P>>, OpenError> {
@@ -70,11 +82,12 @@ impl<P: DiskPartition> Directory<P> {
             let name = file.name;
             let attrs = file.attributes;
             let stream = file.stream;
+            let timestamps = file.timestamps;
 
             items.push(if attrs.is_directory() {
-                Item::Directory(Directory::new(self.exfat.clone(), name, stream))
+                Item::Directory(Directory::new(self.exfat.clone(), name, stream, timestamps))
             } else {
-                match File::new(self.exfat.clone(), name, stream) {
+                match File::new(self.exfat.clone(), name, stream, timestamps) {
                     Ok(v) => Item::File(v),
                     Err(e) => {
                         return Err(OpenError::CreateFileObjectFailed(

@@ -18,6 +18,7 @@ pub mod fat;
 pub mod file;
 pub mod image;
 pub mod param;
+pub mod timestamp;
 
 /// Represents a root directory in exFAT.
 ///
@@ -209,12 +210,13 @@ impl<P: DiskPartition> Root<P> {
                     let name = file.name;
                     let attrs = file.attributes;
                     let stream = file.stream;
+                    let timestamps = file.timestamps;
 
                     // Add to the list.
                     items.push(if attrs.is_directory() {
-                        Item::Directory(Directory::new(exfat.clone(), name, stream))
+                        Item::Directory(Directory::new(exfat.clone(), name, stream, timestamps))
                     } else {
-                        match File::new(exfat.clone(), name, stream) {
+                        match File::new(exfat.clone(), name, stream, timestamps) {
                             Ok(v) => Item::File(v),
                             Err(e) => {
                                 return Err(OpenError::CreateFileObjectFailed(
