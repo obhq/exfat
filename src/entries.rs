@@ -1,5 +1,6 @@
 use crate::cluster::ClustersReader;
 use crate::disk::DiskPartition;
+use crate::timestamp::{Timestamp, Timestamps};
 use crate::FileAttributes;
 use byteorder::{ByteOrder, LE};
 use std::cmp::min;
@@ -78,6 +79,7 @@ pub(crate) struct FileEntry {
     pub name: String,
     pub attributes: FileAttributes,
     pub stream: StreamEntry,
+    pub timestamps: Timestamps,
 }
 
 impl FileEntry {
@@ -145,6 +147,28 @@ impl FileEntry {
         let mut need = stream.name_length * 2;
         let mut name = String::with_capacity(15 * names.len());
 
+        // Read timestamps (see https://learn.microsoft.com/en-us/windows/win32/fileio/exfat-specification#74-file-directory-entry)
+        let create_ts = LE::read_u32(&data[8..12]);
+        let last_modified_ts = LE::read_u32(&data[12..16]);
+        let last_accessed_ts = LE::read_u32(&data[16..20]);
+        let create_10_ms_increment = data[20];
+        let last_modified_10_ms_increment = data[21];
+        let create_utc_offset = if ((data[22] >> 7) & 1) == 1 {
+            (data[22] & 0x7F) as i8
+        } else {
+            0
+        };
+        let last_modified_utc_offset = if ((data[23] >> 7) & 1) == 1 {
+            (data[23] & 0x7F) as i8
+        } else {
+            0
+        };
+        let last_accessed_utc_offset = if ((data[24] >> 7) & 1) == 1 {
+            (data[24] & 0x7F) as i8
+        } else {
+            0
+        };
+
         for entry in names {
             let data = entry.data;
 
@@ -176,6 +200,15 @@ impl FileEntry {
             name,
             attributes,
             stream,
+            timestamps: Timestamps::new(
+                Timestamp::new(create_ts, create_10_ms_increment, create_utc_offset),
+                Timestamp::new(
+                    last_modified_ts,
+                    last_modified_10_ms_increment,
+                    last_modified_utc_offset,
+                ),
+                Timestamp::new(last_accessed_ts, 0, last_accessed_utc_offset),
+            ),
         })
     }
 }

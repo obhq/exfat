@@ -1,6 +1,7 @@
 use crate::cluster::ClustersReader;
 use crate::disk::DiskPartition;
 use crate::entries::StreamEntry;
+use crate::timestamp::Timestamps;
 use crate::ExFat;
 use std::io::{empty, Empty};
 use std::io::{IoSliceMut, Read, Seek, SeekFrom};
@@ -12,6 +13,7 @@ pub struct File<P: DiskPartition> {
     name: String,
     len: u64,
     reader: Reader<P>, // FIXME: Use trait object once https://github.com/rust-lang/rfcs/issues/2035 is resolved.
+    timestamps: Timestamps,
 }
 
 impl<P: DiskPartition> File<P> {
@@ -19,6 +21,7 @@ impl<P: DiskPartition> File<P> {
         exfat: Arc<ExFat<P>>,
         name: String,
         stream: StreamEntry,
+        timestamps: Timestamps,
     ) -> Result<Self, NewError> {
         // Create a cluster reader.
         let alloc = stream.allocation();
@@ -40,7 +43,12 @@ impl<P: DiskPartition> File<P> {
             Reader::Cluster(reader)
         };
 
-        Ok(Self { name, len, reader })
+        Ok(Self {
+            name,
+            len,
+            reader,
+            timestamps,
+        })
     }
 
     pub fn name(&self) -> &str {
@@ -53,6 +61,10 @@ impl<P: DiskPartition> File<P> {
 
     pub fn len(&self) -> u64 {
         self.len
+    }
+
+    pub fn timestamps(&self) -> &Timestamps {
+        &self.timestamps
     }
 }
 
