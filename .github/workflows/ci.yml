@@ -11,8 +11,8 @@ jobs:
     name: Build
     runs-on: ubuntu-22.04
     steps:
-    - name: Checkout source
-      uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v4
     - name: Check code styles
       run: cargo fmt --check
     - name: Run Clippy
