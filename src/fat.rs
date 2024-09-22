@@ -1,7 +1,8 @@
 use crate::disk::DiskPartition;
 use crate::param::Params;
 use byteorder::{ByteOrder, LE};
-use core::fmt::Display;
+use core::fmt::Debug;
+use thiserror::Error;
 
 pub(crate) struct Fat {
     entries: Vec<u32>,
@@ -12,7 +13,7 @@ impl Fat {
         params: &Params,
         partition: &P,
         index: usize,
-    ) -> Result<Self, LoadError> {
+    ) -> Result<Self, LoadError<P>> {
         // Get FAT region offset.
         let sector = match params.fat_length.checked_mul(index as u64) {
             Some(v) => match params.fat_offset.checked_add(v) {
@@ -76,34 +77,26 @@ impl<'fat> Iterator for ClusterChain<'fat> {
 }
 
 /// Represents an error for [`Fat::load()`].
-#[derive(Debug)]
-pub enum LoadError {
+#[derive(Error)]
+pub enum LoadError<P: DiskPartition> {
+    #[error("invalid FatLength")]
     InvalidFatLength,
+
+    #[error("invalid FatOffset")]
     InvalidFatOffset,
 
-    #[cfg(not(feature = "std"))]
-    ReadFailed(u64, Box<dyn Display + Send + Sync>),
-
-    #[cfg(feature = "std")]
-    ReadFailed(u64, Box<dyn std::error::Error + Send + Sync>),
+    #[error("cannot read the data at {0:#x}")]
+    ReadFailed(u64, #[source] P::Err),
 }
 
-impl Display for LoadError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<P: DiskPartition> Debug for LoadError<P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidFatLength => f.write_str("invalid FatLength"),
-            Self::InvalidFatOffset => f.write_str("invalid FatOffset"),
-            Self::ReadFailed(offset, _) => write!(f, "cannot read the data at {offset:#018x}"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for LoadError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::ReadFailed(_, e) => Some(e.as_ref()),
-            _ => None,
+            Self::InvalidFatLength => write!(f, "InvalidFatLength"),
+            Self::InvalidFatOffset => write!(f, "InvalidFatOffset"),
+            Self::ReadFailed(arg0, arg1) => {
+                f.debug_tuple("ReadFailed").field(arg0).field(arg1).finish()
+            }
         }
     }
 }

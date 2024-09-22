@@ -143,7 +143,7 @@ impl<P: DiskPartition> Read for ClustersReader<P> {
         let amount = min(buf.len(), remaining as usize);
 
         if let Err(e) = self.exfat.partition.read_exact(offset, &mut buf[..amount]) {
-            return Err(Error::new(ErrorKind::Other, e));
+            return Err(Error::new(ErrorKind::Other, Box::new(e)));
         }
 
         self.offset += amount as u64;

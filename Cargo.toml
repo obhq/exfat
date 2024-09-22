@@ -5,6 +5,7 @@ description = "Pure Rust implementation of exFAT file system"
 repository = "https://github.com/obhq/exfat"
 license = "MIT"
 edition = "2021"
+rust-version = "1.81"
 
 [features]
 default = ["std"]

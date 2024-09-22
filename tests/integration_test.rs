@@ -1,5 +1,4 @@
 use exfat::directory::Item;
-use exfat::image::Image;
 use exfat::timestamp::Timestamp;
 use exfat::Root;
 use std::fs::File;
@@ -30,7 +29,6 @@ fn read_image() {
     // Open the image.
     let image: PathBuf = ["tests", "exfat.img"].iter().collect();
     let image = File::open(image).expect("cannot open exfat.img");
-    let image = Image::open(image).expect("cannot open exFAT image from exfat.img");
 
     // Open root directory.
     let root = Root::open(image).expect("cannot open the root directory");

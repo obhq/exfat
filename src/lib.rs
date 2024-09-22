@@ -1,22 +1,22 @@
 use self::cluster::ClustersReader;
 use self::directory::{Directory, Item};
-use self::disk::DiskPartition;
 use self::entries::{ClusterAllocation, EntriesReader, EntryType, FileEntry};
 use self::fat::Fat;
 use self::file::File;
 use self::param::Params;
 use byteorder::{ByteOrder, LE};
-use std::error::Error;
+use core::fmt::Debug;
 use std::sync::Arc;
 use thiserror::Error;
 
+pub use self::disk::*;
+
 pub mod cluster;
 pub mod directory;
-pub mod disk;
+mod disk;
 pub mod entries;
 pub mod fat;
 pub mod file;
-pub mod image;
 pub mod param;
 pub mod timestamp;
 
@@ -30,7 +30,7 @@ pub struct Root<P: DiskPartition> {
 }
 
 impl<P: DiskPartition> Root<P> {
-    pub fn open(partition: P) -> Result<Self, OpenError> {
+    pub fn open(partition: P) -> Result<Self, OpenError<P>> {
         // Read boot sector.
         let mut boot = [0u8; 512];
 
@@ -300,11 +300,11 @@ pub(crate) struct ExFat<P: DiskPartition> {
     fat: Fat,
 }
 
-/// Represents an error for [`Root::open()`].
-#[derive(Debug, Error)]
-pub enum OpenError {
+/// Represents an error when [`Root::open()`] fails.
+#[derive(Error)]
+pub enum OpenError<P: DiskPartition> {
     #[error("cannot read main boot region")]
-    ReadMainBootFailed(#[source] Box<dyn Error + Send + Sync>),
+    ReadMainBootFailed(#[source] P::Err),
 
     #[error("image is not exFAT")]
     NotExFat,
@@ -319,7 +319,7 @@ pub enum OpenError {
     InvalidNumberOfFats,
 
     #[error("cannot read FAT region")]
-    ReadFatRegionFailed(#[source] fat::LoadError),
+    ReadFatRegionFailed(#[source] self::fat::LoadError<P>),
 
     #[error("cannot create a clusters reader")]
     CreateClustersReaderFailed(#[source] cluster::NewError),
@@ -362,4 +362,58 @@ pub enum OpenError {
 
     #[error("no Up-case Table available")]
     NoUpcaseTable,
+}
+
+impl<P: DiskPartition> Debug for OpenError<P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ReadMainBootFailed(arg0) => {
+                f.debug_tuple("ReadMainBootFailed").field(arg0).finish()
+            }
+            Self::NotExFat => write!(f, "NotExFat"),
+            Self::InvalidBytesPerSectorShift => write!(f, "InvalidBytesPerSectorShift"),
+            Self::InvalidSectorsPerClusterShift => write!(f, "InvalidSectorsPerClusterShift"),
+            Self::InvalidNumberOfFats => write!(f, "InvalidNumberOfFats"),
+            Self::ReadFatRegionFailed(arg0) => {
+                f.debug_tuple("ReadFatRegionFailed").field(arg0).finish()
+            }
+            Self::CreateClustersReaderFailed(arg0) => f
+                .debug_tuple("CreateClustersReaderFailed")
+                .field(arg0)
+                .finish(),
+            Self::ReadEntryFailed(arg0) => f.debug_tuple("ReadEntryFailed").field(arg0).finish(),
+            Self::NotPrimaryEntry(arg0, arg1) => f
+                .debug_tuple("NotPrimaryEntry")
+                .field(arg0)
+                .field(arg1)
+                .finish(),
+            Self::TooManyAllocationBitmap => write!(f, "TooManyAllocationBitmap"),
+            Self::WrongAllocationBitmap => write!(f, "WrongAllocationBitmap"),
+            Self::MultipleUpcaseTable => write!(f, "MultipleUpcaseTable"),
+            Self::MultipleVolumeLabel => write!(f, "MultipleVolumeLabel"),
+            Self::InvalidVolumeLabel => write!(f, "InvalidVolumeLabel"),
+            Self::LoadFileEntryFailed(arg0) => {
+                f.debug_tuple("LoadFileEntryFailed").field(arg0).finish()
+            }
+            Self::CreateFileObjectFailed(arg0, arg1, arg2) => f
+                .debug_tuple("CreateFileObjectFailed")
+                .field(arg0)
+                .field(arg1)
+                .field(arg2)
+                .finish(),
+            Self::ReadClusterAllocationFailed(arg0, arg1, arg2) => f
+                .debug_tuple("ReadClusterAllocationFailed")
+                .field(arg0)
+                .field(arg1)
+                .field(arg2)
+                .finish(),
+            Self::UnknownEntry(arg0, arg1) => f
+                .debug_tuple("UnknownEntry")
+                .field(arg0)
+                .field(arg1)
+                .finish(),
+            Self::NoAllocationBitmap => write!(f, "NoAllocationBitmap"),
+            Self::NoUpcaseTable => write!(f, "NoUpcaseTable"),
+        }
+    }
 }

@@ -1,67 +1,55 @@
-use core::fmt::Display;
+use core::error::Error;
 
 /// Encapsulate a disk partition.
 pub trait DiskPartition {
-    #[cfg(not(feature = "std"))]
-    fn read(&self, offset: u64, buf: &mut [u8]) -> Result<u64, Box<dyn Display + Send + Sync>>;
+    type Err: PartitionError + 'static;
 
-    #[cfg(feature = "std")]
-    fn read(
-        &self,
-        offset: u64,
-        buf: &mut [u8],
-    ) -> Result<u64, Box<dyn std::error::Error + Send + Sync>>;
+    fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, Self::Err>;
 
-    #[cfg(not(feature = "std"))]
-    fn read_exact(
-        &self,
-        mut offset: u64,
-        mut buf: &mut [u8],
-    ) -> Result<(), Box<dyn Display + Send + Sync>> {
+    fn read_exact(&self, mut offset: u64, mut buf: &mut [u8]) -> Result<(), Self::Err> {
         while !buf.is_empty() {
             let n = self.read(offset, buf)?;
 
             if n == 0 {
-                return Err(Box::new(UnexpectedEop));
+                return Err(PartitionError::unexpected_eop());
             }
 
-            offset += n;
-            buf = &mut buf[n.try_into().unwrap()..];
-        }
+            offset = n
+                .try_into()
+                .ok()
+                .and_then(|n| offset.checked_add(n))
+                .unwrap();
 
-        Ok(())
-    }
-
-    #[cfg(feature = "std")]
-    fn read_exact(
-        &self,
-        mut offset: u64,
-        mut buf: &mut [u8],
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        while !buf.is_empty() {
-            let n = self.read(offset, buf)?;
-
-            if n == 0 {
-                return Err(Box::new(UnexpectedEop));
-            }
-
-            offset += n;
-            buf = &mut buf[n.try_into().unwrap()..];
+            buf = &mut buf[n..];
         }
 
         Ok(())
     }
 }
 
-/// An error for unexpected end of partition.
-#[derive(Debug)]
-struct UnexpectedEop;
+/// Represents an error when an operation on [`DiskPartition`] fails.
+pub trait PartitionError: Error + Send + Sync {
+    fn unexpected_eop() -> Self;
+}
 
-impl Display for UnexpectedEop {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("end of partition has been reached")
+#[cfg(feature = "std")]
+impl DiskPartition for std::fs::File {
+    type Err = std::io::Error;
+
+    #[cfg(unix)]
+    fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, Self::Err> {
+        std::os::unix::fs::FileExt::read_at(self, buf, offset)
+    }
+
+    #[cfg(windows)]
+    fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, Self::Err> {
+        std::os::windows::fs::FileExt::seek_read(self, buf, offset)
     }
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for UnexpectedEop {}
+impl PartitionError for std::io::Error {
+    fn unexpected_eop() -> Self {
+        std::io::Error::from(std::io::ErrorKind::UnexpectedEof)
+    }
+}
