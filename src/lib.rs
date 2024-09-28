@@ -30,17 +30,17 @@ pub struct Root<P: DiskPartition> {
 }
 
 impl<P: DiskPartition> Root<P> {
-    pub fn open(partition: P) -> Result<Self, OpenError<P>> {
+    pub fn open(partition: P) -> Result<Self, RootError<P>> {
         // Read boot sector.
         let mut boot = [0u8; 512];
 
         if let Err(e) = partition.read_exact(0, &mut boot) {
-            return Err(OpenError::ReadMainBootFailed(e));
+            return Err(RootError::ReadMainBootFailed(e));
         }
 
         // Check type.
         if &boot[3..11] != b"EXFAT   " || !boot[11..64].iter().all(|&b| b == 0) {
-            return Err(OpenError::NotExFat);
+            return Err(RootError::NotExFat);
         }
 
         // Load fields.
@@ -57,7 +57,7 @@ impl<P: DiskPartition> Root<P> {
                 if (9..=12).contains(&v) {
                     1u64 << v
                 } else {
-                    return Err(OpenError::InvalidBytesPerSectorShift);
+                    return Err(RootError::InvalidBytesPerSectorShift);
                 }
             },
             sectors_per_cluster: {
@@ -68,7 +68,7 @@ impl<P: DiskPartition> Root<P> {
                 if v <= (25 - boot[108]) {
                     1u64 << v
                 } else {
-                    return Err(OpenError::InvalidSectorsPerClusterShift);
+                    return Err(RootError::InvalidSectorsPerClusterShift);
                 }
             },
             number_of_fats: {
@@ -77,7 +77,7 @@ impl<P: DiskPartition> Root<P> {
                 if v == 1 || v == 2 {
                     v
                 } else {
-                    return Err(OpenError::InvalidNumberOfFats);
+                    return Err(RootError::InvalidNumberOfFats);
                 }
             },
         };
@@ -87,10 +87,10 @@ impl<P: DiskPartition> Root<P> {
         let fat = if active_fat == 0 || params.number_of_fats == 2 {
             match Fat::load(&params, &partition, active_fat) {
                 Ok(v) => v,
-                Err(e) => return Err(OpenError::ReadFatRegionFailed(e)),
+                Err(e) => return Err(RootError::ReadFatRegionFailed(e)),
             }
         } else {
-            return Err(OpenError::InvalidNumberOfFats);
+            return Err(RootError::InvalidNumberOfFats);
         };
 
         // Create a entries reader for the root directory.
@@ -103,7 +103,7 @@ impl<P: DiskPartition> Root<P> {
 
         let mut reader = match ClustersReader::new(exfat.clone(), root_cluster, None, None) {
             Ok(v) => EntriesReader::new(v),
-            Err(e) => return Err(OpenError::CreateClustersReaderFailed(e)),
+            Err(e) => return Err(RootError::CreateClustersReaderFailed(e)),
         };
 
         // Load root directory.
@@ -116,7 +116,7 @@ impl<P: DiskPartition> Root<P> {
             // Read primary entry.
             let entry = match reader.read() {
                 Ok(v) => v,
-                Err(e) => return Err(OpenError::ReadEntryFailed(e)),
+                Err(e) => return Err(RootError::ReadEntryFailed(e)),
             };
 
             // Check entry type.
@@ -125,7 +125,7 @@ impl<P: DiskPartition> Root<P> {
             if !ty.is_regular() {
                 break;
             } else if ty.type_category() != EntryType::PRIMARY {
-                return Err(OpenError::NotPrimaryEntry(entry.index(), entry.cluster()));
+                return Err(RootError::NotPrimaryEntry(entry.index(), entry.cluster()));
             }
 
             // Parse primary entry.
@@ -133,7 +133,7 @@ impl<P: DiskPartition> Root<P> {
                 (EntryType::CRITICAL, 1) => {
                     // Get next index.
                     let index = if allocation_bitmaps[1].is_some() {
-                        return Err(OpenError::TooManyAllocationBitmap);
+                        return Err(RootError::TooManyAllocationBitmap);
                     } else if allocation_bitmaps[0].is_some() {
                         1
                     } else {
@@ -145,13 +145,13 @@ impl<P: DiskPartition> Root<P> {
                     let bitmap_flags = data[1] as usize;
 
                     if (bitmap_flags & 1) != index {
-                        return Err(OpenError::WrongAllocationBitmap);
+                        return Err(RootError::WrongAllocationBitmap);
                     }
 
                     allocation_bitmaps[index] = match ClusterAllocation::load(&entry) {
                         Ok(v) => Some(v),
                         Err(e) => {
-                            return Err(OpenError::ReadClusterAllocationFailed(
+                            return Err(RootError::ReadClusterAllocationFailed(
                                 entry.index(),
                                 entry.cluster(),
                                 e,
@@ -162,12 +162,12 @@ impl<P: DiskPartition> Root<P> {
                 (EntryType::CRITICAL, 2) => {
                     // Check if more than one up-case table.
                     if upcase_table.is_some() {
-                        return Err(OpenError::MultipleUpcaseTable);
+                        return Err(RootError::MultipleUpcaseTable);
                     }
 
                     // Load fields.
                     if let Err(e) = ClusterAllocation::load(&entry) {
-                        return Err(OpenError::ReadClusterAllocationFailed(
+                        return Err(RootError::ReadClusterAllocationFailed(
                             entry.index(),
                             entry.cluster(),
                             e,
@@ -179,7 +179,7 @@ impl<P: DiskPartition> Root<P> {
                 (EntryType::CRITICAL, 3) => {
                     // Check if more than one volume label.
                     if volume_label.is_some() {
-                        return Err(OpenError::MultipleVolumeLabel);
+                        return Err(RootError::MultipleVolumeLabel);
                     }
 
                     // Load fields.
@@ -187,7 +187,7 @@ impl<P: DiskPartition> Root<P> {
                     let character_count = data[1] as usize;
 
                     if character_count > 11 {
-                        return Err(OpenError::InvalidVolumeLabel);
+                        return Err(RootError::InvalidVolumeLabel);
                     }
 
                     let raw_label = &data[2..(2 + character_count * 2)];
@@ -204,7 +204,7 @@ impl<P: DiskPartition> Root<P> {
                     // Load the entry.
                     let file = match FileEntry::load(&entry, &mut reader) {
                         Ok(v) => v,
-                        Err(e) => return Err(OpenError::LoadFileEntryFailed(e)),
+                        Err(e) => return Err(RootError::LoadFileEntryFailed(e)),
                     };
 
                     let name = file.name;
@@ -219,7 +219,7 @@ impl<P: DiskPartition> Root<P> {
                         match File::new(exfat.clone(), name, stream, timestamps) {
                             Ok(v) => Item::File(v),
                             Err(e) => {
-                                return Err(OpenError::CreateFileObjectFailed(
+                                return Err(RootError::CreateFileObjectFailed(
                                     entry.index(),
                                     entry.cluster(),
                                     e,
@@ -228,22 +228,22 @@ impl<P: DiskPartition> Root<P> {
                         }
                     });
                 }
-                _ => return Err(OpenError::UnknownEntry(entry.index(), entry.cluster())),
+                _ => return Err(RootError::UnknownEntry(entry.index(), entry.cluster())),
             }
         }
 
         // Check allocation bitmap count.
         if exfat.params.number_of_fats == 2 {
             if allocation_bitmaps[1].is_none() {
-                return Err(OpenError::NoAllocationBitmap);
+                return Err(RootError::NoAllocationBitmap);
             }
         } else if allocation_bitmaps[0].is_none() {
-            return Err(OpenError::NoAllocationBitmap);
+            return Err(RootError::NoAllocationBitmap);
         }
 
         // Check Up-case Table.
         if upcase_table.is_none() {
-            return Err(OpenError::NoUpcaseTable);
+            return Err(RootError::NoUpcaseTable);
         }
 
         Ok(Self {
@@ -302,7 +302,7 @@ pub(crate) struct ExFat<P: DiskPartition> {
 
 /// Represents an error when [`Root::open()`] fails.
 #[derive(Error)]
-pub enum OpenError<P: DiskPartition> {
+pub enum RootError<P: DiskPartition> {
     #[error("cannot read main boot region")]
     ReadMainBootFailed(#[source] P::Err),
 
@@ -364,7 +364,7 @@ pub enum OpenError<P: DiskPartition> {
     NoUpcaseTable,
 }
 
-impl<P: DiskPartition> Debug for OpenError<P> {
+impl<P: DiskPartition> Debug for RootError<P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ReadMainBootFailed(arg0) => {
