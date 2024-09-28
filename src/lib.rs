@@ -11,7 +11,7 @@ use core::fmt::Debug;
 use std::sync::Arc;
 use thiserror::Error;
 
-pub mod cluster;
+mod cluster;
 mod directory;
 mod disk;
 pub mod entries;
@@ -293,8 +293,8 @@ impl FileAttributes {
     }
 }
 
-/// Contains objects for the opened exFAT.
-pub(crate) struct ExFat<P: DiskPartition> {
+/// Contains objects for opened exFAT filesystem.
+struct ExFat<P: DiskPartition> {
     partition: P,
     params: Params,
     fat: Fat,

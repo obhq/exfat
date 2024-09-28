@@ -1,12 +1,12 @@
 use crate::disk::DiskPartition;
 use crate::ExFat;
 use std::cmp::min;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Seek, SeekFrom};
 use std::sync::Arc;
 use thiserror::Error;
 
-/// A cluster reader to read all data in a cluster chain.
-pub(crate) struct ClustersReader<P: DiskPartition> {
+/// Struct to read all data in a cluster chain.
+pub struct ClustersReader<P: DiskPartition> {
     exfat: Arc<ExFat<P>>,
     chain: Vec<usize>,
     data_length: u64,
@@ -72,6 +72,57 @@ impl<P: DiskPartition> ClustersReader<P> {
     pub fn cluster(&self) -> usize {
         self.chain[(self.offset / self.exfat.params.cluster_size()) as usize]
     }
+
+    pub fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use std::io::{Error, ErrorKind};
+
+        // Check if the actual read is required.
+        if buf.is_empty() || self.offset == self.data_length {
+            return Ok(0);
+        }
+
+        // Get remaining data in the current cluster.
+        let cluster_size = self.exfat.params.cluster_size();
+        let cluster_remaining = cluster_size - self.offset % cluster_size;
+        let remaining = min(cluster_remaining, self.data_length - self.offset);
+
+        // Get the offset in the partition.
+        let cluster = self.chain[(self.offset / cluster_size) as usize];
+        let offset = match self.exfat.params.cluster_offset(cluster) {
+            Some(v) => v + self.offset % cluster_size,
+            None => {
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    format!("cluster #{cluster} is not available"),
+                ));
+            }
+        };
+
+        // Read image.
+        let amount = min(buf.len(), remaining as usize);
+
+        if let Err(e) = self.exfat.partition.read_exact(offset, &mut buf[..amount]) {
+            return Err(Error::new(ErrorKind::Other, Box::new(e)));
+        }
+
+        self.offset += amount as u64;
+
+        Ok(amount)
+    }
+
+    pub fn read_exact(&mut self, mut buf: &mut [u8]) -> Result<(), std::io::Error> {
+        while !buf.is_empty() {
+            let n = self.read(buf)?;
+
+            if n == 0 {
+                return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+            }
+
+            buf = &mut buf[n..];
+        }
+
+        Ok(())
+    }
 }
 
 impl<P: DiskPartition> Seek for ClustersReader<P> {
@@ -110,45 +161,6 @@ impl<P: DiskPartition> Seek for ClustersReader<P> {
 
     fn stream_position(&mut self) -> std::io::Result<u64> {
         Ok(self.offset)
-    }
-}
-
-impl<P: DiskPartition> Read for ClustersReader<P> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        use std::io::{Error, ErrorKind};
-
-        // Check if the actual read is required.
-        if buf.is_empty() || self.offset == self.data_length {
-            return Ok(0);
-        }
-
-        // Get remaining data in the current cluster.
-        let cluster_size = self.exfat.params.cluster_size();
-        let cluster_remaining = cluster_size - self.offset % cluster_size;
-        let remaining = min(cluster_remaining, self.data_length - self.offset);
-
-        // Get the offset in the partition.
-        let cluster = self.chain[(self.offset / cluster_size) as usize];
-        let offset = match self.exfat.params.cluster_offset(cluster) {
-            Some(v) => v + self.offset % cluster_size,
-            None => {
-                return Err(Error::new(
-                    ErrorKind::Other,
-                    format!("cluster #{cluster} is not available"),
-                ));
-            }
-        };
-
-        // Read image.
-        let amount = min(buf.len(), remaining as usize);
-
-        if let Err(e) = self.exfat.partition.read_exact(offset, &mut buf[..amount]) {
-            return Err(Error::new(ErrorKind::Other, Box::new(e)));
-        }
-
-        self.offset += amount as u64;
-
-        Ok(amount)
     }
 }
 

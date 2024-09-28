@@ -7,7 +7,7 @@ use crate::ExFat;
 use std::sync::Arc;
 use thiserror::Error;
 
-/// Represents a directory in the exFAT.
+/// Represents a directory in an exFAT filesystem.
 pub struct Directory<P: DiskPartition> {
     exfat: Arc<ExFat<P>>,
     name: String,

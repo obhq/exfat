@@ -5,7 +5,6 @@ use crate::FileAttributes;
 use byteorder::{ByteOrder, LE};
 use std::cmp::min;
 use std::fmt::{Display, Formatter};
-use std::io::Read;
 use thiserror::Error;
 
 /// A struct to read directory entries.

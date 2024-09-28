@@ -4,7 +4,7 @@ use crate::entries::StreamEntry;
 use crate::timestamp::Timestamps;
 use crate::ExFat;
 use std::io::{empty, Empty};
-use std::io::{IoSliceMut, Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -96,34 +96,6 @@ impl<P: DiskPartition> Read for File<P> {
         match &mut self.reader {
             Reader::Cluster(r) => r.read(buf),
             Reader::Empty(r) => r.read(buf),
-        }
-    }
-
-    fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> std::io::Result<usize> {
-        match &mut self.reader {
-            Reader::Cluster(r) => r.read_vectored(bufs),
-            Reader::Empty(r) => r.read_vectored(bufs),
-        }
-    }
-
-    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> std::io::Result<usize> {
-        match &mut self.reader {
-            Reader::Cluster(r) => r.read_to_end(buf),
-            Reader::Empty(r) => r.read_to_end(buf),
-        }
-    }
-
-    fn read_to_string(&mut self, buf: &mut String) -> std::io::Result<usize> {
-        match &mut self.reader {
-            Reader::Cluster(r) => r.read_to_string(buf),
-            Reader::Empty(r) => r.read_to_string(buf),
-        }
-    }
-
-    fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
-        match &mut self.reader {
-            Reader::Cluster(r) => r.read_exact(buf),
-            Reader::Empty(r) => r.read_exact(buf),
         }
     }
 }
