@@ -38,7 +38,7 @@ impl<P: DiskPartition> Directory<P> {
         &self.timestamps
     }
 
-    pub fn open(&self) -> Result<Vec<Item<P>>, OpenError> {
+    pub fn open(&self) -> Result<Vec<Item<P>>, DirectoryError> {
         // Create an entries reader.
         let alloc = self.stream.allocation();
         let mut reader = match ClustersReader::new(
@@ -48,7 +48,7 @@ impl<P: DiskPartition> Directory<P> {
             Some(self.stream.no_fat_chain()),
         ) {
             Ok(v) => EntriesReader::new(v),
-            Err(e) => return Err(OpenError::CreateClustersReaderFailed(alloc.clone(), e)),
+            Err(e) => return Err(DirectoryError::CreateClustersReaderFailed(alloc.clone(), e)),
         };
 
         // Read file entries.
@@ -58,7 +58,7 @@ impl<P: DiskPartition> Directory<P> {
             // Read primary entry.
             let entry = match reader.read() {
                 Ok(v) => v,
-                Err(e) => return Err(OpenError::ReadEntryFailed(e)),
+                Err(e) => return Err(DirectoryError::ReadEntryFailed(e)),
             };
 
             // Check entry type.
@@ -67,15 +67,18 @@ impl<P: DiskPartition> Directory<P> {
             if !ty.is_regular() {
                 break;
             } else if ty.type_category() != EntryType::PRIMARY {
-                return Err(OpenError::NotPrimaryEntry(entry.index(), entry.cluster()));
+                return Err(DirectoryError::NotPrimaryEntry(
+                    entry.index(),
+                    entry.cluster(),
+                ));
             } else if ty.type_importance() != EntryType::CRITICAL || ty.type_code() != 5 {
-                return Err(OpenError::NotFileEntry(entry.index(), entry.cluster()));
+                return Err(DirectoryError::NotFileEntry(entry.index(), entry.cluster()));
             }
 
             // Parse file entry.
             let file = match FileEntry::load(&entry, &mut reader) {
                 Ok(v) => v,
-                Err(e) => return Err(OpenError::LoadFileEntryFailed(e)),
+                Err(e) => return Err(DirectoryError::LoadFileEntryFailed(e)),
             };
 
             // Construct item.
@@ -90,7 +93,7 @@ impl<P: DiskPartition> Directory<P> {
                 match File::new(self.exfat.clone(), name, stream, timestamps) {
                     Ok(v) => Item::File(v),
                     Err(e) => {
-                        return Err(OpenError::CreateFileObjectFailed(
+                        return Err(DirectoryError::CreateFileObjectFailed(
                             entry.index(),
                             entry.cluster(),
                             e,
@@ -110,9 +113,9 @@ pub enum Item<P: DiskPartition> {
     File(File<P>),
 }
 
-/// Represents an error for [`open()`][Directory::open].
+/// Represents an error when [`Directory::open()`] fails.
 #[derive(Debug, Error)]
-pub enum OpenError {
+pub enum DirectoryError {
     #[error("cannot create a clusters reader for allocation {0}")]
     CreateClustersReaderFailed(ClusterAllocation, #[source] crate::cluster::NewError),
 
