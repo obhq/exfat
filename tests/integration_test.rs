@@ -1,6 +1,5 @@
-use exfat::directory::Item;
 use exfat::timestamp::Timestamp;
-use exfat::Root;
+use exfat::{Item, Root};
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;

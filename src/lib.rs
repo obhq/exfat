@@ -1,5 +1,7 @@
+pub use self::directory::*;
+pub use self::disk::*;
+
 use self::cluster::ClustersReader;
-use self::directory::{Directory, Item};
 use self::entries::{ClusterAllocation, EntriesReader, EntryType, FileEntry};
 use self::fat::Fat;
 use self::file::File;
@@ -9,10 +11,8 @@ use core::fmt::Debug;
 use std::sync::Arc;
 use thiserror::Error;
 
-pub use self::disk::*;
-
 pub mod cluster;
-pub mod directory;
+mod directory;
 mod disk;
 pub mod entries;
 pub mod fat;

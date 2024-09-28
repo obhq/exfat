@@ -18,6 +18,12 @@ for item in root {
 }
 ```
 
+## Breaking changes
+
+### 0.1 to 0.2
+
+My Rust skill has improved a lot since version 0.1 so I take this semver breaking change to make a lot of things better. That mean version 0.2 is not compatible with 0.1 in any ways.
+
 ## License
 
 MIT
