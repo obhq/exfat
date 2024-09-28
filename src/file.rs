@@ -3,6 +3,7 @@ use crate::disk::DiskPartition;
 use crate::entries::StreamEntry;
 use crate::timestamp::Timestamps;
 use crate::ExFat;
+use core::cmp::min;
 use std::io::{empty, Empty};
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
@@ -70,24 +71,57 @@ impl<P: DiskPartition> File<P> {
 
 impl<P: DiskPartition> Seek for File<P> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        match &mut self.reader {
-            Reader::Cluster(r) => r.seek(pos),
-            Reader::Empty(r) => r.seek(pos),
-        }
+        use std::io::{Error, ErrorKind};
+
+        // Check if empty file.
+        let r = match &mut self.reader {
+            Reader::Cluster(r) => r,
+            Reader::Empty(r) => return r.seek(pos),
+        };
+
+        // Get absolute offset.
+        let o = match pos {
+            SeekFrom::Start(v) => min(v, r.data_length()),
+            SeekFrom::End(v) => {
+                if v >= 0 {
+                    r.data_length()
+                } else if let Some(v) = r.data_length().checked_sub(v.unsigned_abs()) {
+                    v
+                } else {
+                    return Err(Error::from(ErrorKind::InvalidInput));
+                }
+            }
+            SeekFrom::Current(v) => v.try_into().map_or_else(
+                |_| {
+                    r.stream_position()
+                        .checked_sub(v.unsigned_abs())
+                        .ok_or_else(|| Error::from(ErrorKind::InvalidInput))
+                },
+                |v| Ok(min(r.stream_position().saturating_add(v), r.data_length())),
+            )?,
+        };
+
+        assert!(r.seek(o));
+
+        Ok(o)
     }
 
     fn rewind(&mut self) -> std::io::Result<()> {
-        match &mut self.reader {
-            Reader::Cluster(r) => r.rewind(),
-            Reader::Empty(r) => r.rewind(),
-        }
+        let r = match &mut self.reader {
+            Reader::Cluster(r) => r,
+            Reader::Empty(r) => return r.rewind(),
+        };
+
+        Ok(r.rewind())
     }
 
     fn stream_position(&mut self) -> std::io::Result<u64> {
-        match &mut self.reader {
-            Reader::Cluster(r) => r.stream_position(),
-            Reader::Empty(r) => r.stream_position(),
-        }
+        let r = match &mut self.reader {
+            Reader::Cluster(r) => r,
+            Reader::Empty(r) => return r.stream_position(),
+        };
+
+        Ok(r.stream_position())
     }
 }
 

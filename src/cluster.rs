@@ -1,7 +1,6 @@
 use crate::disk::DiskPartition;
 use crate::ExFat;
 use std::cmp::min;
-use std::io::{Seek, SeekFrom};
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -73,6 +72,10 @@ impl<P: DiskPartition> ClustersReader<P> {
         self.chain[(self.offset / self.exfat.params.cluster_size()) as usize]
     }
 
+    pub fn data_length(&self) -> u64 {
+        self.data_length
+    }
+
     pub fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         use std::io::{Error, ErrorKind};
 
@@ -123,44 +126,22 @@ impl<P: DiskPartition> ClustersReader<P> {
 
         Ok(())
     }
-}
 
-impl<P: DiskPartition> Seek for ClustersReader<P> {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        use std::io::{Error, ErrorKind};
+    pub fn seek(&mut self, off: u64) -> bool {
+        if off > self.data_length {
+            return false;
+        }
 
-        self.offset = match pos {
-            SeekFrom::Start(v) => min(v, self.data_length),
-            SeekFrom::End(v) => {
-                if v >= 0 {
-                    self.data_length
-                } else if let Some(v) = self.data_length.checked_sub(v.unsigned_abs()) {
-                    v
-                } else {
-                    return Err(Error::from(ErrorKind::InvalidInput));
-                }
-            }
-            SeekFrom::Current(v) => {
-                if v >= 0 {
-                    min(self.offset + (v as u64), self.data_length)
-                } else if let Some(v) = self.offset.checked_sub(v.unsigned_abs()) {
-                    v
-                } else {
-                    return Err(Error::from(ErrorKind::InvalidInput));
-                }
-            }
-        };
-
-        Ok(self.offset)
+        self.offset = off;
+        true
     }
 
-    fn rewind(&mut self) -> std::io::Result<()> {
+    pub fn rewind(&mut self) {
         self.offset = 0;
-        Ok(())
     }
 
-    fn stream_position(&mut self) -> std::io::Result<u64> {
-        Ok(self.offset)
+    pub fn stream_position(&self) -> u64 {
+        self.offset
     }
 }
 
