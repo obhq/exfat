@@ -14,11 +14,13 @@ use thiserror::Error;
 mod cluster;
 mod directory;
 mod disk;
-pub mod entries;
+mod entries;
 pub mod fat;
 pub mod file;
 pub mod param;
 pub mod timestamp;
+
+extern crate alloc;
 
 /// Represents a root directory in exFAT.
 ///
@@ -44,7 +46,7 @@ impl<P: DiskPartition> Root<P> {
         }
 
         // Load fields.
-        let params = Params {
+        let params = Arc::new(Params {
             fat_offset: LE::read_u32(&boot[80..]) as u64,
             fat_length: LE::read_u32(&boot[84..]) as u64,
             cluster_heap_offset: LE::read_u32(&boot[88..]) as u64,
@@ -80,13 +82,13 @@ impl<P: DiskPartition> Root<P> {
                     return Err(RootError::InvalidNumberOfFats);
                 }
             },
-        };
+        });
 
         // Read FAT region.
         let active_fat = params.volume_flags.active_fat();
         let fat = if active_fat == 0 || params.number_of_fats == 2 {
             match Fat::load(&params, &partition, active_fat) {
-                Ok(v) => v,
+                Ok(v) => Arc::new(v),
                 Err(e) => return Err(RootError::ReadFatRegionFailed(e)),
             }
         } else {
@@ -94,14 +96,9 @@ impl<P: DiskPartition> Root<P> {
         };
 
         // Create a entries reader for the root directory.
+        let disk = Arc::new(partition);
         let root_cluster = params.first_cluster_of_root_directory;
-        let exfat = Arc::new(ExFat {
-            partition,
-            params,
-            fat,
-        });
-
-        let mut reader = match ClustersReader::new(exfat.clone(), root_cluster, None, None) {
+        let mut reader = match ClustersReader::new(&disk, &params, &fat, root_cluster, None, None) {
             Ok(v) => EntriesReader::new(v),
             Err(e) => return Err(RootError::CreateClustersReaderFailed(e)),
         };
@@ -214,9 +211,16 @@ impl<P: DiskPartition> Root<P> {
 
                     // Add to the list.
                     items.push(if attrs.is_directory() {
-                        Item::Directory(Directory::new(exfat.clone(), name, stream, timestamps))
+                        Item::Directory(Directory::new(
+                            disk.clone(),
+                            params.clone(),
+                            fat.clone(),
+                            name,
+                            stream,
+                            timestamps,
+                        ))
                     } else {
-                        match File::new(exfat.clone(), name, stream, timestamps) {
+                        match File::new(&disk, &params, &fat, name, stream, timestamps) {
                             Ok(v) => Item::File(v),
                             Err(e) => {
                                 return Err(RootError::CreateFileObjectFailed(
@@ -233,7 +237,7 @@ impl<P: DiskPartition> Root<P> {
         }
 
         // Check allocation bitmap count.
-        if exfat.params.number_of_fats == 2 {
+        if params.number_of_fats == 2 {
             if allocation_bitmaps[1].is_none() {
                 return Err(RootError::NoAllocationBitmap);
             }
@@ -291,13 +295,6 @@ impl FileAttributes {
     pub fn is_archive(self) -> bool {
         (self.0 & 0x0020) != 0
     }
-}
-
-/// Contains objects for opened exFAT filesystem.
-struct ExFat<P: DiskPartition> {
-    partition: P,
-    params: Params,
-    fat: Fat,
 }
 
 /// Represents an error when [`Root::open()`] fails.

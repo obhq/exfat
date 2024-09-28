@@ -1,25 +1,26 @@
 use crate::cluster::ClustersReader;
 use crate::disk::DiskPartition;
 use crate::entries::StreamEntry;
+use crate::fat::Fat;
+use crate::param::Params;
 use crate::timestamp::Timestamps;
-use crate::ExFat;
+use alloc::sync::Arc;
 use core::cmp::min;
-use std::io::{empty, Empty};
-use std::io::{Read, Seek, SeekFrom};
-use std::sync::Arc;
 use thiserror::Error;
 
-/// Represents a file in the exFAT.
-pub struct File<P: DiskPartition> {
+/// Represents a file in an exFAT filesystem.
+pub struct File<D> {
     name: String,
     len: u64,
-    reader: Reader<P>, // FIXME: Use trait object once https://github.com/rust-lang/rfcs/issues/2035 is resolved.
+    reader: Option<ClustersReader<Arc<D>, Arc<Params>>>,
     timestamps: Timestamps,
 }
 
-impl<P: DiskPartition> File<P> {
+impl<D> File<D> {
     pub(crate) fn new(
-        exfat: Arc<ExFat<P>>,
+        disk: &Arc<D>,
+        params: &Arc<Params>,
+        fat: &Fat,
         name: String,
         stream: StreamEntry,
         timestamps: Timestamps,
@@ -29,19 +30,19 @@ impl<P: DiskPartition> File<P> {
         let first_cluster = alloc.first_cluster();
         let len = stream.valid_data_length();
         let reader = if first_cluster == 0 {
-            Reader::Empty(empty())
+            None
         } else {
-            let reader = match ClustersReader::new(
-                exfat,
+            match ClustersReader::new(
+                disk.clone(),
+                params.clone(),
+                fat,
                 first_cluster,
                 Some(len),
                 Some(stream.no_fat_chain()),
             ) {
-                Ok(v) => v,
+                Ok(v) => Some(v),
                 Err(e) => return Err(NewError::CreateClustersReaderFailed(first_cluster, len, e)),
-            };
-
-            Reader::Cluster(reader)
+            }
         };
 
         Ok(Self {
@@ -69,14 +70,15 @@ impl<P: DiskPartition> File<P> {
     }
 }
 
-impl<P: DiskPartition> Seek for File<P> {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        use std::io::{Error, ErrorKind};
+#[cfg(feature = "std")]
+impl<D> std::io::Seek for File<D> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        use std::io::{Error, ErrorKind, SeekFrom};
 
         // Check if empty file.
         let r = match &mut self.reader {
-            Reader::Cluster(r) => r,
-            Reader::Empty(r) => return r.seek(pos),
+            Some(v) => v,
+            None => return std::io::empty().seek(pos),
         };
 
         // Get absolute offset.
@@ -108,8 +110,8 @@ impl<P: DiskPartition> Seek for File<P> {
 
     fn rewind(&mut self) -> std::io::Result<()> {
         let r = match &mut self.reader {
-            Reader::Cluster(r) => r,
-            Reader::Empty(r) => return r.rewind(),
+            Some(v) => v,
+            None => return Ok(()),
         };
 
         r.rewind();
@@ -119,27 +121,22 @@ impl<P: DiskPartition> Seek for File<P> {
 
     fn stream_position(&mut self) -> std::io::Result<u64> {
         let r = match &mut self.reader {
-            Reader::Cluster(r) => r,
-            Reader::Empty(r) => return r.stream_position(),
+            Some(v) => v,
+            None => return Ok(0),
         };
 
         Ok(r.stream_position())
     }
 }
 
-impl<P: DiskPartition> Read for File<P> {
+#[cfg(feature = "std")]
+impl<D: DiskPartition> std::io::Read for File<D> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match &mut self.reader {
-            Reader::Cluster(r) => r.read(buf),
-            Reader::Empty(r) => r.read(buf),
+            Some(v) => v.read(buf),
+            None => Ok(0),
         }
     }
-}
-
-/// Encapsulate the either [`ClustersReader`] or [`Empty`].
-enum Reader<P: DiskPartition> {
-    Cluster(ClustersReader<P>),
-    Empty(Empty),
 }
 
 /// Represents an error for [`File::new()`].

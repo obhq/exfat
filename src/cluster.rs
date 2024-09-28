@@ -1,20 +1,23 @@
 use crate::disk::DiskPartition;
-use crate::ExFat;
+use crate::fat::Fat;
+use crate::param::Params;
 use std::cmp::min;
-use std::sync::Arc;
 use thiserror::Error;
 
 /// Struct to read all data in a cluster chain.
-pub struct ClustersReader<P: DiskPartition> {
-    exfat: Arc<ExFat<P>>,
+pub struct ClustersReader<D, P> {
+    disk: D,
+    params: P,
     chain: Vec<usize>,
     data_length: u64,
     offset: u64,
 }
 
-impl<P: DiskPartition> ClustersReader<P> {
+impl<D, P: AsRef<Params>> ClustersReader<D, P> {
     pub fn new(
-        exfat: Arc<ExFat<P>>,
+        disk: D,
+        params: P,
+        fat: &Fat,
         first_cluster: usize,
         data_length: Option<u64>,
         no_fat_chain: Option<bool>,
@@ -24,9 +27,7 @@ impl<P: DiskPartition> ClustersReader<P> {
         }
 
         // Get cluster chain.
-        let params = &exfat.params;
-        let fat = &exfat.fat;
-        let cluster_size = params.cluster_size();
+        let cluster_size = params.as_ref().cluster_size();
         let (chain, data_length) = if no_fat_chain.unwrap_or(false) {
             // If the NoFatChain bit is 1 then DataLength must not be zero.
             let data_length = match data_length {
@@ -54,14 +55,18 @@ impl<P: DiskPartition> ClustersReader<P> {
                         v
                     }
                 }
-                None => params.bytes_per_sector * (params.sectors_per_cluster * chain.len() as u64),
+                None => {
+                    params.as_ref().bytes_per_sector
+                        * (params.as_ref().sectors_per_cluster * chain.len() as u64)
+                }
             };
 
             (chain, data_length)
         };
 
         Ok(Self {
-            exfat,
+            disk,
+            params,
             chain,
             data_length,
             offset: 0,
@@ -69,13 +74,34 @@ impl<P: DiskPartition> ClustersReader<P> {
     }
 
     pub fn cluster(&self) -> usize {
-        self.chain[(self.offset / self.exfat.params.cluster_size()) as usize]
+        self.chain[(self.offset / self.params.as_ref().cluster_size()) as usize]
     }
+}
 
+impl<D, P> ClustersReader<D, P> {
     pub fn data_length(&self) -> u64 {
         self.data_length
     }
 
+    pub fn seek(&mut self, off: u64) -> bool {
+        if off > self.data_length {
+            return false;
+        }
+
+        self.offset = off;
+        true
+    }
+
+    pub fn rewind(&mut self) {
+        self.offset = 0;
+    }
+
+    pub fn stream_position(&self) -> u64 {
+        self.offset
+    }
+}
+
+impl<D: DiskPartition, P: AsRef<Params>> ClustersReader<D, P> {
     pub fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         use std::io::{Error, ErrorKind};
 
@@ -85,13 +111,14 @@ impl<P: DiskPartition> ClustersReader<P> {
         }
 
         // Get remaining data in the current cluster.
-        let cluster_size = self.exfat.params.cluster_size();
+        let params = self.params.as_ref();
+        let cluster_size = params.cluster_size();
         let cluster_remaining = cluster_size - self.offset % cluster_size;
         let remaining = min(cluster_remaining, self.data_length - self.offset);
 
         // Get the offset in the partition.
         let cluster = self.chain[(self.offset / cluster_size) as usize];
-        let offset = match self.exfat.params.cluster_offset(cluster) {
+        let offset = match params.cluster_offset(cluster) {
             Some(v) => v + self.offset % cluster_size,
             None => {
                 return Err(Error::new(
@@ -104,7 +131,7 @@ impl<P: DiskPartition> ClustersReader<P> {
         // Read image.
         let amount = min(buf.len(), remaining as usize);
 
-        if let Err(e) = self.exfat.partition.read_exact(offset, &mut buf[..amount]) {
+        if let Err(e) = self.disk.read_exact(offset, &mut buf[..amount]) {
             return Err(Error::new(ErrorKind::Other, Box::new(e)));
         }
 
@@ -125,23 +152,6 @@ impl<P: DiskPartition> ClustersReader<P> {
         }
 
         Ok(())
-    }
-
-    pub fn seek(&mut self, off: u64) -> bool {
-        if off > self.data_length {
-            return false;
-        }
-
-        self.offset = off;
-        true
-    }
-
-    pub fn rewind(&mut self) {
-        self.offset = 0;
-    }
-
-    pub fn stream_position(&self) -> u64 {
-        self.offset
     }
 }
 

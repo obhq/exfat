@@ -1,5 +1,6 @@
 use crate::cluster::ClustersReader;
 use crate::disk::DiskPartition;
+use crate::param::Params;
 use crate::timestamp::{Timestamp, Timestamps};
 use crate::FileAttributes;
 use byteorder::{ByteOrder, LE};
@@ -7,20 +8,22 @@ use std::cmp::min;
 use std::fmt::{Display, Formatter};
 use thiserror::Error;
 
-/// A struct to read directory entries.
-pub(crate) struct EntriesReader<P: DiskPartition> {
-    cluster_reader: ClustersReader<P>,
+/// Struct to read directory entries.
+pub struct EntriesReader<D, P> {
+    cluster_reader: ClustersReader<D, P>,
     entry_index: usize,
 }
 
-impl<P: DiskPartition> EntriesReader<P> {
-    pub fn new(cluster_reader: ClustersReader<P>) -> Self {
+impl<D, P> EntriesReader<D, P> {
+    pub fn new(cluster_reader: ClustersReader<D, P>) -> Self {
         Self {
             cluster_reader,
             entry_index: 0,
         }
     }
+}
 
+impl<D: DiskPartition, P: AsRef<Params>> EntriesReader<D, P> {
     pub fn read(&mut self) -> Result<RawEntry, ReaderError> {
         // Get current cluster and entry index.
         let cluster = self.cluster_reader.cluster();
@@ -82,10 +85,10 @@ pub(crate) struct FileEntry {
 }
 
 impl FileEntry {
-    pub fn load<P>(raw: &RawEntry, reader: &mut EntriesReader<P>) -> Result<Self, FileEntryError>
-    where
-        P: DiskPartition,
-    {
+    pub fn load<D: DiskPartition, P: AsRef<Params>>(
+        raw: &RawEntry,
+        reader: &mut EntriesReader<D, P>,
+    ) -> Result<Self, FileEntryError> {
         // Load fields.
         let data = &raw.data;
         let secondary_count = data[1] as usize;

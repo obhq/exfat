@@ -1,29 +1,36 @@
 use crate::cluster::ClustersReader;
 use crate::disk::DiskPartition;
 use crate::entries::{ClusterAllocation, EntriesReader, EntryType, FileEntry, StreamEntry};
+use crate::fat::Fat;
 use crate::file::File;
+use crate::param::Params;
 use crate::timestamp::Timestamps;
-use crate::ExFat;
-use std::sync::Arc;
+use alloc::sync::Arc;
 use thiserror::Error;
 
 /// Represents a directory in an exFAT filesystem.
-pub struct Directory<P: DiskPartition> {
-    exfat: Arc<ExFat<P>>,
+pub struct Directory<D> {
+    disk: Arc<D>,
+    params: Arc<Params>,
+    fat: Arc<Fat>,
     name: String,
     stream: StreamEntry,
     timestamps: Timestamps,
 }
 
-impl<P: DiskPartition> Directory<P> {
+impl<D> Directory<D> {
     pub(crate) fn new(
-        exfat: Arc<ExFat<P>>,
+        disk: Arc<D>,
+        params: Arc<Params>,
+        fat: Arc<Fat>,
         name: String,
         stream: StreamEntry,
         timestamps: Timestamps,
     ) -> Self {
         Self {
-            exfat,
+            disk,
+            params,
+            fat,
             name,
             stream,
             timestamps,
@@ -37,12 +44,16 @@ impl<P: DiskPartition> Directory<P> {
     pub fn timestamps(&self) -> &Timestamps {
         &self.timestamps
     }
+}
 
-    pub fn open(&self) -> Result<Vec<Item<P>>, DirectoryError> {
+impl<D: DiskPartition> Directory<D> {
+    pub fn open(&self) -> Result<Vec<Item<D>>, DirectoryError> {
         // Create an entries reader.
         let alloc = self.stream.allocation();
         let mut reader = match ClustersReader::new(
-            self.exfat.clone(),
+            &self.disk,
+            &self.params,
+            &self.fat,
             alloc.first_cluster(),
             Some(alloc.data_length()),
             Some(self.stream.no_fat_chain()),
@@ -52,7 +63,7 @@ impl<P: DiskPartition> Directory<P> {
         };
 
         // Read file entries.
-        let mut items: Vec<Item<P>> = Vec::new();
+        let mut items: Vec<Item<D>> = Vec::new();
 
         loop {
             // Read primary entry.
@@ -88,9 +99,23 @@ impl<P: DiskPartition> Directory<P> {
             let timestamps = file.timestamps;
 
             items.push(if attrs.is_directory() {
-                Item::Directory(Directory::new(self.exfat.clone(), name, stream, timestamps))
+                Item::Directory(Self {
+                    disk: self.disk.clone(),
+                    params: self.params.clone(),
+                    fat: self.fat.clone(),
+                    name,
+                    stream,
+                    timestamps,
+                })
             } else {
-                match File::new(self.exfat.clone(), name, stream, timestamps) {
+                match File::new(
+                    &self.disk,
+                    &self.params,
+                    &self.fat,
+                    name,
+                    stream,
+                    timestamps,
+                ) {
                     Ok(v) => Item::File(v),
                     Err(e) => {
                         return Err(DirectoryError::CreateFileObjectFailed(
@@ -108,9 +133,9 @@ impl<P: DiskPartition> Directory<P> {
 }
 
 /// Represents an item in the directory.
-pub enum Item<P: DiskPartition> {
-    Directory(Directory<P>),
-    File(File<P>),
+pub enum Item<D> {
+    Directory(Directory<D>),
+    File(File<D>),
 }
 
 /// Represents an error when [`Directory::open()`] fails.

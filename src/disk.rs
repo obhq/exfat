@@ -1,4 +1,6 @@
+use alloc::sync::Arc;
 use core::error::Error;
+use core::ops::Deref;
 
 /// Encapsulate a disk partition.
 pub trait DiskPartition {
@@ -30,6 +32,22 @@ pub trait DiskPartition {
 /// Represents an error when an operation on [`DiskPartition`] fails.
 pub trait PartitionError: Error + Send + Sync {
     fn unexpected_eop() -> Self;
+}
+
+impl<T: DiskPartition> DiskPartition for &T {
+    type Err = T::Err;
+
+    fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, Self::Err> {
+        (*self).read(offset, buf)
+    }
+}
+
+impl<T: DiskPartition> DiskPartition for Arc<T> {
+    type Err = T::Err;
+
+    fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, Self::Err> {
+        self.deref().read(offset, buf)
+    }
 }
 
 #[cfg(feature = "std")]
