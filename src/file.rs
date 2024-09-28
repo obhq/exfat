@@ -112,7 +112,9 @@ impl<P: DiskPartition> Seek for File<P> {
             Reader::Empty(r) => return r.rewind(),
         };
 
-        Ok(r.rewind())
+        r.rewind();
+
+        Ok(())
     }
 
     fn stream_position(&mut self) -> std::io::Result<u64> {
